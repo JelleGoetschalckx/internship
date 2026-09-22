@@ -8,6 +8,7 @@ import random
 import math
 import os
 
+
 # Settings
 settings: dict = {
     "background_color": "grey",
@@ -29,7 +30,7 @@ EEG_codes = {
     RDM      (4) |     40     |           41            |     43     |     44
     RSopen   (5) |     50     |            |            |            |     54
     RSclosed (6) |     60     |            |            |            |     64
-    
+
     """
     "fix_cross": 10,
     "blockOET": 20,
@@ -51,6 +52,7 @@ EEG_codes = {
     "startRSclosed": 60,
     "endRSclosed": 64
 }
+
 
 def init_hardware(monitor_name: str):
     if monitor_name == "Lab":
@@ -78,7 +80,7 @@ def init_hardware(monitor_name: str):
 
     pix_per_deg = (SCREEN_RES[0] / SCREEN_WIDTH) / (2 * math.degrees(math.atan(0.5 / VIEW_DIST)))  # pixels per degree
     settings["pix_per_degree"] = pix_per_deg
-    settings["grid_size"]: float|int = pix_per_deg * settings["VISUAL_ANGLE"]
+    settings["grid_size"]: float | int = pix_per_deg * settings["VISUAL_ANGLE"]
 
     win = visual.Window(fullscr=True, units="pix", color=settings["background_color"])
     win.mouseVisible = False
@@ -90,13 +92,17 @@ def init_hardware(monitor_name: str):
 
     return win, FPS, frame_duration, mouse, clock
 
-def connect_EEG(port_name: str) -> None:
+
+def connect_EEG(port_name: str) -> bool:
     try:
         settings["port"] = Serial(port_name, baudrate=115200)
         settings["EEG_connected"] = True
         print(f"EEG port connected ({port_name}).")
+        return True
     except Exception as e:
         print(f"EEG port not found: running without triggers. ({e})")
+        return False
+
 
 def EEG_trigger(trigger_code: str) -> None:
     """
@@ -106,8 +112,9 @@ def EEG_trigger(trigger_code: str) -> None:
     """
     if settings["EEG_connected"]:
         settings["EEG_port"].write(EEG_codes[trigger_code].to_bytes(1, 'big'))
-        core.wait(0.01)
+        core.wait(0.01) #todo maybe just lower this?
         settings["EEG_port"].write((0).to_bytes(1, 'big'))
+
 
 def participant_info() -> dict:
     """
@@ -131,50 +138,36 @@ def participant_info() -> dict:
         core.quit()
 
     return {
-        "nr": int(info["Participant nummer"]), # noqa
-        "ISI": int(info["ISI"]), # noqa
+        "nr": int(info["Participant nummer"]),  # noqa
+        "ISI": int(info["ISI"]),  # noqa
         "age": info["Leeftijd"],
         "gender": info["Gender"],
         "PC": info["PC"]
     }
 
-def get_task_order(nr: int) -> tuple:
-    """
-    Generate task order based on nr
-    :param nr: participant number
-    :return: permutation number, full task order for current participant
-    """
-    task_perms = list(permutations(("MET", "OET", "RDM")))
-    nr_mod = nr % len(task_perms) + 1
-    return (
-        nr_mod,
-        [
-            "eyes-open",
-            "eyes-closed",
-            *task_perms[(nr_mod - 1) % len(task_perms)],
-            "eyes-open",
-            "eyes-closed"
-        ]
-    )
 
 def add_participant_data(trials: data.TrialHandler, participant_data: dict) -> None:
     for name, value in participant_data.items():
         trials.addData(name, value)
 
 
-class RDM(DotStim):
-    def __init__(self, win: visual.Window, clock: core.Clock, FPS: int, color: float|int=0.4):
+class RDM(DotStim): # todo also staircase procedure here? either contrast or amount of dots
+    def __init__(self, class_settings: dict):
+        self.win = class_settings["win"]
+        self.FPS = class_settings["FPS"]
+        self.color = class_settings["RDM_color"]
+
         DotStim.__init__(
             self,
-            win=win,
+            win=self.win,
             nDots=100,
             units="pix",
             dotSize=5,
             fieldShape="square",
             fieldSize=(settings["grid_size"], settings["grid_size"]),
-            speed=(1/FPS)*50,  # pixels per frame
-            color=color,
-            dotLife=int((1/FPS) * 0.3),  # 0 to dotLife in frames
+            speed=(1 / self.FPS) * 50,  # pixels per frame
+            color=self.color,
+            dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames
             coherence=0.55,
         )
         # Movement directions
@@ -187,10 +180,11 @@ class RDM(DotStim):
             "down": 270
         }  # !! degrees go counterclockwise
 
-        self.fix_cross = visual.ShapeStim(win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3, closeShape=False, lineColor=color)
-        self.clock = clock
-        
-    def trial_maker(self, n_trials: int) -> list:
+        self.fix_cross = visual.ShapeStim(self.win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3,
+                                          closeShape=False, lineColor=class_settings["color_gray"])
+        self.clock = class_settings["clock"]
+
+    def make_trials(self, n_trials: int) -> list:
         trial_list = []
         for _ in range(n_trials):
             trial_list.append(
@@ -206,7 +200,7 @@ class RDM(DotStim):
         accuracy = int(self.dir_to_angle[response] == rotation)
         return accuracy
 
-    def run(self, trials: data.TrialHandler, participant_data: dict, exp_data: data.ExperimentHandler) -> None:
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
         EEG_trigger("blockRDM")
         for trial in trials:
             # Prepare EEG trigger fixation cross
@@ -218,7 +212,7 @@ class RDM(DotStim):
             self.win.flip()
             # Prepare EEG trigger when first trial frame presented
             self.win.callOnFlip(EEG_trigger, trigger_code="RDM")
-            core.wait(random.randrange(500, 1500)/1000)
+            core.wait(random.randrange(500, 1500) / 1000)
             # Trial & response
             response = []
             event.clearEvents()
@@ -241,7 +235,7 @@ class RDM(DotStim):
             trials.addData("correct_response", trial["dir"])
             trials.addData("accuracy", self.evaluation(self.dir, response[0]))
             add_participant_data(trials, participant_data)
-            exp_data.nextEntry()
+            expHandler.nextEntry()
 
         EEG_trigger("endBlockRDM")
 
@@ -250,19 +244,20 @@ class RDM(DotStim):
 
 
 class OET_MET:
-    def __init__(self, win: visual.Window, clock: core.Clock, mouse: event.Mouse, ISI: int, color: float|int=-0.2):
-        self.win = win
-        self.clock = clock
-        self.mouse = mouse
-        self.ISI = ISI
-        self.color = color
+    def __init__(self, class_settings: dict):
+        self.win = class_settings["win"]
+        self.clock = class_settings["clock"]
+        self.mouse = class_settings["mouse"]
+        self.ISI = class_settings["ISI"]
+        self.color = class_settings["color_gray"]
         # Fix cross
-        self.fix_cross = visual.ShapeStim(win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3, closeShape=False, lineColor=color)
+        self.fix_cross = visual.ShapeStim(self.win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3,
+                                          closeShape=False, lineColor=self.color)
         # Grid
         self.n_grids = int(settings["N_CELLS"][0]) * int(settings["N_CELLS"][1])
-        self.grid_size: float|int = settings["grid_size"]
+        self.grid_size: float | int = settings["grid_size"]
         self.grid_positions = self.calc_grid_positions(self.grid_size)
-        self.grid_line = visual.Line(win, units="pix", lineColor=color)
+        self.grid_line = visual.Line(self.win, units="pix", lineColor=self.color)
         self.grid = self.create_grid()
         # Annuli stim
         self.annuli_positions = self.calc_annuli_positions(self.grid_size)
@@ -271,7 +266,7 @@ class OET_MET:
         self.response_boxes = self.create_response_boxes()
 
     @staticmethod
-    def calc_grid_positions(grid_size: float|int) -> list:
+    def calc_grid_positions(grid_size: float | int) -> list:
         n_squares = settings["N_CELLS"][0]
         return [
             grid_size + grid_size / 4 * i - (grid_size + grid_size / 4 * n_squares / 2) for i in range(n_squares + 1)
@@ -299,7 +294,7 @@ class OET_MET:
         )
 
     @staticmethod
-    def calc_annuli_positions(grid_size: float|int) -> dict:
+    def calc_annuli_positions(grid_size: float | int) -> dict:
         n_rows = settings["N_CELLS"][0]
         n_cols = settings["N_CELLS"][1]
         cell_width = grid_size / n_rows
@@ -307,34 +302,37 @@ class OET_MET:
 
         positions = {}
         counter = 1
-        for row in range(n_rows - 1, -1, -1): # Top to bottom
-            for col in range(n_cols): # Left to right
-                positions[counter] = (-grid_size / 2 + (col + 0.5) * cell_width, -grid_size / 2 + (row + 0.5) * cell_height)
+        for row in range(n_rows - 1, -1, -1):  # Top to bottom
+            for col in range(n_cols):  # Left to right
+                positions[counter] = (-grid_size / 2 + (col + 0.5) * cell_width,
+                                      -grid_size / 2 + (row + 0.5) * cell_height)
                 counter += 1
 
         return positions
 
     def create_annulus_shape(self) -> visual.GratingStim:
         # Size of stimulus: three quarters of one cell in grid
-        RADIUS: float|int = settings["grid_size"] * (3 / 4) / 4 / 2
+        RADIUS: float | int = settings["grid_size"] * (3 / 4) / 4 / 2
         MASK_RES: int = 1024
-        THICKNESS: float|int = 0.20
-        GAP: float|int = 0.15  # Higher = bigger gap
+        THICKNESS: float | int = 0.20
+        GAP: float | int = 0.15  # Higher = bigger gap
         # Start with no mask, gradually add pixels to mask if in certain area (middle of circle and edges)
-        mask = ones((MASK_RES, MASK_RES)) * -1 # noqa
+        mask = ones((MASK_RES, MASK_RES)) * -1  # noqa
         for row in range(MASK_RES):
             for col in range(MASK_RES):
                 x = (col / (MASK_RES - 1)) * 2 - 1
                 y = (row / (MASK_RES - 1)) * 2 - 1
                 if 1 - THICKNESS <= math.sqrt(x ** 2 + y ** 2) <= 1.0 and y >= GAP:
-                    mask[row, col] = 1 # noqa
+                    mask[row, col] = 1  # noqa
 
-        return visual.GratingStim(self.win, tex=None, mask=mask, size=(RADIUS * 2, RADIUS * 2), color='black', contrast=0.8, units="pix")
+        return visual.GratingStim(self.win, tex=None, mask=mask, size=(RADIUS * 2, RADIUS * 2), color='black',
+                                  contrast=0.8, units="pix")
 
     def draw_annuli(self, n_frame: int, trial: dict) -> None:
         # Pick only relevant positions for this frame (half of total)
         total_cells = len(trial["non_targets"])
-        relevant_cells = trial["non_targets"][None if n_frame == 1 else total_cells // 2: total_cells // 2 if n_frame == 1 else None]
+        relevant_cells = trial["non_targets"][
+            None if n_frame == 1 else total_cells // 2: total_cells // 2 if n_frame == 1 else None]
         for i, stim in enumerate(relevant_cells):
             for ori in [0, 180]:
                 self.annulus.ori = trial["rotation"][i] + ori
@@ -352,7 +350,8 @@ class OET_MET:
             all_stimuli: list = [x for x in range(1, self.n_grids + 1)]
             random.shuffle(all_stimuli)
             half_target: int = all_stimuli.pop(all_stimuli.index(random.choice(all_stimuli)))
-            missing_target: int = all_stimuli.pop(all_stimuli.index(random.choice([x for x in all_stimuli if x != half_target])))
+            missing_target: int = all_stimuli.pop(
+                all_stimuli.index(random.choice([x for x in all_stimuli if x != half_target])))
             # Place trial per trial into list
             trial_list.append(
                 {
@@ -429,7 +428,7 @@ class OET_MET:
         accuracy = response == correct_response
         return rt, response, correct_response, accuracy
 
-    def run(self, trials: data.TrialHandler, participant_data: dict, exp_data: data.ExperimentHandler) -> None:
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
         EEG_trigger(f"block{trials.trialList[0]['type']}")
         for trial in trials:
             # Prepare EEG trigger fixation cross
@@ -444,7 +443,7 @@ class OET_MET:
             self.win.flip()
             # Prepare EEG trigger first frame
             self.win.callOnFlip(EEG_trigger, trigger_code=f"{trial['type']}1")
-            core.wait(random.randrange(500, 1500)/1000)
+            core.wait(random.randrange(500, 1500) / 1000)
 
             # ___ First frame ___
             self.grid.draw()
@@ -476,7 +475,7 @@ class OET_MET:
             trials.addData("accuracy", int(accuracy))
             trials.addData("ISI", self.ISI)
             add_participant_data(trials, participant_data)
-            exp_data.nextEntry()
+            expHandler.nextEntry()
 
         EEG_trigger(f"endBlock{trials.trialList[0]['type']}")
 
@@ -485,47 +484,80 @@ class OET_MET:
 
 
 class OET(OET_MET):
-    def __init__(self, win: visual.Window, clock: core.Clock, mouse: event.Mouse, ISI: int):
-        OET_MET.__init__(self, win, clock, mouse, ISI)
+    def __init__(self, class_settings: dict):
+        OET_MET.__init__(self, class_settings)
 
     def make_trials(self, n_trials: int) -> list:
         return self.trial_maker(n_trials, "OET")  # Pass to parent class with correct trial_type
 
 
 class MET(OET_MET):
-    def __init__(self, win: visual.Window, clock: core.Clock, mouse: event.Mouse, ISI: int):
-        OET_MET.__init__(self, win, clock, mouse, ISI)
+    def __init__(self, class_settings: dict):
+        OET_MET.__init__(self, class_settings)
 
     def make_trials(self, n_trials: int) -> list:
         return self.trial_maker(n_trials, "MET")  # Pass to parent class with correct trial_type
 
 
 class rsEEG:
-    def __init__(self, duration: int, clock: core.Clock):
-        self.duration = duration
-        self.clock = clock
+    def __init__(self, class_settings: dict):
+        self.win = class_settings["win"]
+        self.fix_cross = visual.ShapeStim(self.win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3,
+                                          closeShape=False, lineColor=class_settings["color_gray"])
 
-    def run_rsEEG(self, RS_type):
-        self.clock.reset()
-        EEG_trigger(f"startRS{RS_type}")
-        while self.clock.getTime() < self.duration:
-            pass
+    @staticmethod
+    def trial_maker(duration: int, trial_type: str) -> list:
+        return [
+            {
+            "type": trial_type,
+            "duration": duration,
+            }
+        ]
+
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
+        for trial in trials:
+            EEG_trigger(f"startRS{trial['type']}")
+            self.fix_cross.draw()
+            self.win.flip()
+            core.wait(trial["duration"])
+            EEG_trigger(f"endRS{trial['type']}")
+
+            add_participant_data(trials, participant_data)
+            expHandler.nextEntry()
 
 
 class RS_open(rsEEG):
-    def __init__(self, duration, clock):
-        rsEEG.__init__(self, duration, clock)
+    def __init__(self, class_settings: dict):
+        rsEEG.__init__(self, class_settings)
 
-    def run(self):
-        rsEEG.run_rsEEG(self, "open")
+    def make_trials(self, duration: int=60) -> list:
+        return self.trial_maker(duration, "open") # Pass to parent class with correct trial_type
 
 
 class RS_closed(rsEEG):
-    def __init__(self, duration, clock):
-        rsEEG.__init__(self, duration, clock)
+    def __init__(self, class_settings: dict):
+        rsEEG.__init__(self, class_settings)
 
-    def run(self):
-        rsEEG.run_rsEEG(self, "closed")
+    def make_trials(self, duration: int=180) -> list:
+        return self.trial_maker(duration, "closed") # Pass to parent class with correct trial_type
+
+
+class Communication:
+    def __init__(self, win: visual.Window):
+        self.win = win
+        self.text = visual.TextStim(win, color="black")
+
+    def talk(self, message: str) -> None:
+        options = {
+            "intro": "",
+            "RDM_short": "",
+            "OET_short": "",
+            "MET_short": "",
+            "outro": ""
+        }
+        self.text.text = options[message]
+        self.text.draw()
+        self.win.flip()
 
 
 def stop(win: visual.Window) -> None:
@@ -534,53 +566,70 @@ def stop(win: visual.Window) -> None:
     win.close()
     core.quit()
 
-def main():
-    # Settings
-    demographics = participant_info()
-    win, FPS, frame_duration, mouse, clock = init_hardware(demographics["PC"])
-    demographics["ISI_in_frames"] = math.ceil((demographics["ISI"] / 1000 * FPS))
-    # Connect EEG
-    connect_EEG("COM4")
-    demographics["EEG_connected"] = True
+def task_ordener(nr: int, blocks_per_task: int, save_data: dict) -> tuple:
+    task_perms = list(permutations((MET, OET, RDM)))
+    nr_mod: int = int(nr % len(task_perms) + 1)
+    task_order = (
+            RS_open,
+            RS_closed,
+            *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
+            RS_open,
+            RS_closed
+    )
+    # Save order to datafile
+    save_data["task_order"] = (nr_mod, [clss.__name__ for clss in task_order])
 
-    # Escape key
+    return task_order
+
+
+def main(n_trials_per_block, blocks_per_task):
+    # Settings
+    save_data = participant_info()
+    win, FPS, frame_duration, mouse, clock = init_hardware(save_data["PC"])
+    save_data["ISI_in_frames"] = math.ceil((save_data["ISI"] / 1000 * FPS))
+    comms = Communication(win)
+    # Connect EEG
+    save_data["EEG_connected"] = connect_EEG("COM4")
+
+    # Add escape key to quit experiment
     event.globalKeys.clear()
     event.globalKeys.add(key="escape", func=stop, func_kwargs={"win": win})
 
     # Save file
     full_directory = os.path.join(os.getcwd(), "internship_jelle")
-    exp_data = data.ExperimentHandler(dataFileName=full_directory + "/" + str(demographics["nr"]))
+    expHandler = data.ExperimentHandler(dataFileName=full_directory + "/" + str(save_data["nr"]))
 
-    ## GENERATE TRIALS
-    # Counterbalanced order of tasks, get personal order for participant
-    task_order = get_task_order(demographics["nr"])
-    demographics["task_order"] = task_order
+    ## Generate trial order based on participant number
+    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data)
+    comms.talk("intro")
+    # Run trials
+    for task in task_order:
+        # todo add intro, demo on first run? of enkel in calibration?
+        comms.talk(type(task).__name__)
+        # Init task
+        task = task(
+            {
+                "clock": clock,
+                "win": win,
+                "mouse": mouse,
+                "ISI": save_data["ISI_in_frames"],
+                "color_gray": -0.2,
+                "RDM_color": 0.4,
+                "FPS": FPS
+            }
+        )
+        # Make trials and run them
+        trials = data.TrialHandler(task.make_trials(n_trials_per_block if type(task).__name__ not in ("RSopen", "RSclosed") else {}), nReps=1, method="sequential")
+        expHandler.addLoop(trials)
+        task.run(trials, save_data, expHandler)
 
-    # RDM
-    RDM_task = RDM(win, clock, FPS)
-    RDM_trials = data.TrialHandler(RDM_task.trial_maker(5), nReps=1, method="sequential")
-    exp_data.addLoop(RDM_trials)
-
-    # OET
-    OET_task = OET(win, clock, mouse, demographics["ISI_in_frames"])
-    OET_trials = data.TrialHandler(OET_task.make_trials(5), nReps=1, method="sequential")
-    exp_data.addLoop(OET_trials)
-
-    # MET
-    MET_task = MET(win, clock, mouse, demographics["ISI_in_frames"])
-    MET_trials = data.TrialHandler(MET_task.make_trials(5), nReps=1, method="sequential")
-    exp_data.addLoop(MET_trials)
-
-
-    RDM_task.run(RDM_trials, demographics, exp_data)
-    OET_task.run(OET_trials, demographics, exp_data)
-    MET_task.run(MET_trials, demographics, exp_data)
-
-
-    # TODO !! trials must be added in correct order for participant
-
+    comms.talk("outro")
     stop(win)
 
+    # todo add changing contrast
+    # todo make calibration script -> save as much data as you gather
+
+
 if __name__ == "__main__":
-    main()
+    main(3, 2)
     # todo: device manager -> view -> show hidden devices -> check under 'ports' which port gets added
