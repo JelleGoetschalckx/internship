@@ -1,19 +1,17 @@
 from __future__ import annotations
+import random
+import math
+import os
 from psychopy import visual, core, event, gui, data
 from psychopy.visual.dot import DotStim
 from itertools import permutations
 from serial import Serial
 from numpy import ones
-import random
-import math
-import os
-
 
 # Settings
 settings: dict = {
     "background_color": "grey",
     "N_CELLS": (4, 4),
-    "MET/OET_FRAMES": 1,
     "TRIALS_PER_BLOCK": 45,
     "TOTAL_BLOCKS": 20,
     "VISUAL_ANGLE": 2.5,
@@ -22,7 +20,7 @@ settings: dict = {
 }
 
 EEG_codes = {
-    """
+    """  
                  | start (0)  | stim1 (1)  | stim2 (2)  | resp (3)   | end (4)
     FIX      (1) |     10     |            |            |            |
     OET      (2) |     20     |     21     |     22     |     23     |     24
@@ -53,7 +51,6 @@ EEG_codes = {
     "endRSclosed": 64
 }
 
-
 def init_hardware(monitor_name: str):
     if monitor_name == "Lab":
         SCREEN_RES = (1920, 1080)  # screen resolution (pix)
@@ -69,7 +66,7 @@ def init_hardware(monitor_name: str):
         SCREEN_RES = (1920, 1080)  # screen resolution (pix)
         SCREEN_WIDTH = 60  # screen width (cm)
         VIEW_DIST = 50  # viewing distance (cm)
-        FPS = 60
+        FPS = 120
     elif monitor_name == "Jelle3":
         SCREEN_RES = (1920, 1080)
         SCREEN_WIDTH = 53
@@ -103,7 +100,6 @@ def connect_EEG(port_name: str) -> bool:
         print(f"EEG port not found: running without triggers. ({e})")
         return False
 
-
 def EEG_trigger(trigger_code: str) -> None:
     """
     todo: threading.Timer(0.01, lambda: settings["EEG_port"].write(0.to_bytes(1, 'big'))).start()
@@ -112,16 +108,18 @@ def EEG_trigger(trigger_code: str) -> None:
     """
     if settings["EEG_connected"]:
         settings["EEG_port"].write(EEG_codes[trigger_code].to_bytes(1, 'big'))
-        core.wait(0.01) #todo maybe just lower this?
+        core.wait(0.01) # todo this part might be unnecessary, default is 8ms https://biosemi.com/faq/USB_Trigger_interface_ProgramPulseLength.htm
         settings["EEG_port"].write((0).to_bytes(1, 'big'))
 
-
-def participant_info() -> dict:
+def participant_info(save_dir: str, calibration: bool=False) -> dict: #todo add demo version
     """
     Makes a dialogue box to ask for participant info
     :return: participant number, age and gender
     """
     info = {
+        "Participant nummer": "",
+        "PC": ["Lab", "Jelle1", "Jelle2", "Jelle3"]
+    } if calibration else {
         "Leeftijd": "",
         "Gender": ["Vrouw", "Man", "X"],
         "Participant nummer": "",
@@ -131,13 +129,18 @@ def participant_info() -> dict:
     info_box = gui.DlgFromDict(
         dictionary=info,
         title="Info participant",
-        order=["Leeftijd", "Gender", "Participant nummer", "ISI", "PC"]
+        order= ["Participant nummer", "PC"] if calibration else ["Leeftijd", "Gender", "Participant nummer", "ISI", "PC"]
     )
     # Close experiment if "cancel" was pressed
     if not info_box.OK:
         core.quit()
+    # Close experiment if nr was already used
+    assert not os.path.exists(f"{save_dir}/data_{str(info['Participant nummer'])}.csv"), f"Number {info['Participant nummer']} is already in use."
 
     return {
+        "nr": int(info["Participant nummer"]),  # noqa
+        "PC": info["PC"]
+    } if calibration else {
         "nr": int(info["Participant nummer"]),  # noqa
         "ISI": int(info["ISI"]),  # noqa
         "age": info["Leeftijd"],
@@ -168,7 +171,7 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
             speed=(1 / self.FPS) * 50,  # pixels per frame
             color=self.color,
             dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames
-            coherence=0.55,
+            coherence=0.55, # todo check this
         )
         # Movement directions
         self.dir = -1
@@ -197,8 +200,7 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
         return trial_list
 
     def evaluation(self, rotation: int, response: str) -> int:
-        accuracy = int(self.dir_to_angle[response] == rotation)
-        return accuracy
+        return int(self.dir_to_angle[response] == rotation)
 
     def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
         EEG_trigger("blockRDM")
@@ -239,9 +241,6 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
 
         EEG_trigger("endBlockRDM")
 
-    def demo(self) -> None:
-        raise NotImplementedError
-
 
 class OET_MET:
     def __init__(self, class_settings: dict):
@@ -257,7 +256,6 @@ class OET_MET:
         self.n_grids = int(settings["N_CELLS"][0]) * int(settings["N_CELLS"][1])
         self.grid_size: float | int = settings["grid_size"]
         self.grid_positions = self.calc_grid_positions(self.grid_size)
-        self.grid_line = visual.Line(self.win, units="pix", lineColor=self.color)
         self.grid = self.create_grid()
         # Annuli stim
         self.annuli_positions = self.calc_annuli_positions(self.grid_size)
@@ -274,7 +272,7 @@ class OET_MET:
 
     def create_grid(self) -> visual.ElementArrayStim:
         length = settings["grid_size"]
-        line_width = self.grid_line.lineWidth
+        line_width = 1
         coords = []
         sizes = []
         for ori in [0, 90]:
@@ -403,9 +401,9 @@ class OET_MET:
         self.draw_response_boxes()
         self.grid.draw()
         self.mouse.clickReset()
-        self.win.flip()
         self.mouse.setPos((0, 0))
         self.win.mouseVisible = True
+        self.win.flip()
         self.clock.reset()
         while not response:
             # Color square that is being hovered over
@@ -413,8 +411,8 @@ class OET_MET:
             self.grid.draw()
             self.win.flip()
 
-        EEG_trigger(f"response{trial['type']}")
         rt = self.clock.getTime()
+        EEG_trigger(f"response{trial['type']}")
         self.win.mouseVisible = False
 
         # Reset colors of response boxes, clear display
@@ -428,9 +426,15 @@ class OET_MET:
         accuracy = response == correct_response
         return rt, response, correct_response, accuracy
 
-    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler, use_random_ISI: bool=False) -> None:
         EEG_trigger(f"block{trials.trialList[0]['type']}")
-        for trial in trials:
+        for trial in trials: # todo trial counter?
+            # Use randomized ISI in calibration phase, and set ISI in main experiment
+            if use_random_ISI:
+                ISI = trial["random_ISI"]
+            else:
+                ISI = self.ISI
+
             # Prepare EEG trigger fixation cross
             self.win.callOnFlip(EEG_trigger, trigger_code="fixCross")
             # ___ Fixation cross for 0.5s ___
@@ -451,10 +455,11 @@ class OET_MET:
             self.win.flip()
 
             # ___ ISI with empty grid ___ todo fix timing?? (maybe measures not reliable)
-            for _ in range(self.ISI):
+            for _ in range(ISI):
                 # For-loop for frame perfect timing, this is more temporally accurate than core.wait()
                 self.grid.draw()
                 self.win.flip()
+
             # Prepare EEG trigger second frame
             self.win.callOnFlip(EEG_trigger, trigger_code=f"{trial['type']}2")
             # ___ Second frame ___
@@ -478,9 +483,6 @@ class OET_MET:
             expHandler.nextEntry()
 
         EEG_trigger(f"endBlock{trials.trialList[0]['type']}")
-
-    def demo(self):
-        raise NotImplementedError
 
 
 class OET(OET_MET):
@@ -528,18 +530,18 @@ class rsEEG:
 
 class RS_open(rsEEG):
     def __init__(self, class_settings: dict):
-        rsEEG.__init__(self, class_settings)
+        rsEEG.__init__(self, class_settings) # todo find theoretical justification for durations
 
-    def make_trials(self, duration: int=60) -> list:
-        return self.trial_maker(duration, "open") # Pass to parent class with correct trial_type
+    def make_trials(self, duration: int=1) -> list:
+        return self.trial_maker(duration, "open") # Pass to parent class with correct duration and trial_type
 
 
-class RS_closed(rsEEG):
+class RS_closed(rsEEG): #todo duration is (same in closed and open)
     def __init__(self, class_settings: dict):
         rsEEG.__init__(self, class_settings)
 
-    def make_trials(self, duration: int=180) -> list:
-        return self.trial_maker(duration, "closed") # Pass to parent class with correct trial_type
+    def make_trials(self, duration: int=3) -> list:
+        return self.trial_maker(duration, "closed") # Pass to parent class with correct duration and trial_type
 
 
 class Communication:
@@ -547,18 +549,31 @@ class Communication:
         self.win = win
         self.text = visual.TextStim(win, color="black")
 
-    def talk(self, message: str) -> None:
+    def talk(self, message: str, flip: bool=True) -> None:
+        # todo "press space to continue in texts"
         options = {
-            "intro": "",
-            "RDM_short": "",
-            "OET_short": "",
-            "MET_short": "",
-            "outro": ""
+            "intro_calibration": "[placeholder_intro_calibration]",
+            "intro": "[placeholder_intro]",
+            "RS_open_short": "[placeholder_RS_open_short]",
+            "RS_closed_short": "[placeholder_RS_closed_short]",
+            "RDM_short": "[placeholder_RDM_short]",
+            "OET_calibration": "[placeholder_OET_calibration]",
+            "OET_short": "[placeholder_OET_short]",
+            "MET_calibration": "[placeholder_MET_calibration]",
+            "MET_short": "[placeholder_MET_short]",
+            "outro_calibration": "[placeholder_outro_calibration]",
+            "outro": "[placeholder_outro]",
         }
         self.text.text = options[message]
         self.text.draw()
-        self.win.flip()
+        if flip:
+            self.win.flip()
+            event.waitKeys(keyList=["space"])
 
+
+def add_esc_to_quit(win: visual.Window):
+    event.globalKeys.clear()
+    event.globalKeys.add(key="escape", func=stop, func_kwargs={"win": win})
 
 def stop(win: visual.Window) -> None:
     if settings["EEG_connected"]:
@@ -566,25 +581,42 @@ def stop(win: visual.Window) -> None:
     win.close()
     core.quit()
 
-def task_ordener(nr: int, blocks_per_task: int, save_data: dict) -> tuple:
-    task_perms = list(permutations((MET, OET, RDM)))
+def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, calibration: bool=False) -> tuple:
+    task_perms = list(permutations(tasks))
     nr_mod: int = int(nr % len(task_perms) + 1)
     task_order = (
-            RS_open,
-            RS_closed,
-            *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
-            RS_open,
-            RS_closed
+        RS_open,
+        RS_closed,
+        *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
+        RS_open,
+        RS_closed
+    ) if not calibration else (
+        *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]], # todo add practice trials for both blocks at very start (probably somewhere else than here)
     )
+
     # Save order to datafile
     save_data["task_order"] = (nr_mod, [clss.__name__ for clss in task_order])
 
     return task_order
 
+def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mouse, save_data: dict, FPS, calibration: bool=False) -> dict:
+    return {
+        "clock": clock,
+        "win": win,
+        "mouse": mouse,
+        "ISI": -1 if calibration else save_data["ISI_in_frames"],
+        "color_gray": -0.2,
+        "RDM_color": 0.4,
+        "FPS": FPS
+    }
 
-def main(n_trials_per_block, blocks_per_task):
+
+def main(n_trials_per_block: int, blocks_per_task: int) -> None:
+    # Save file directory
+    directory = os.path.join(os.getcwd(), "main_data")
+
     # Settings
-    save_data = participant_info()
+    save_data = participant_info(directory)
     win, FPS, frame_duration, mouse, clock = init_hardware(save_data["PC"])
     save_data["ISI_in_frames"] = math.ceil((save_data["ISI"] / 1000 * FPS))
     comms = Communication(win)
@@ -592,33 +624,25 @@ def main(n_trials_per_block, blocks_per_task):
     save_data["EEG_connected"] = connect_EEG("COM4")
 
     # Add escape key to quit experiment
-    event.globalKeys.clear()
-    event.globalKeys.add(key="escape", func=stop, func_kwargs={"win": win})
+    add_esc_to_quit(win)
 
-    # Save file
-    full_directory = os.path.join(os.getcwd(), "internship_jelle")
-    expHandler = data.ExperimentHandler(dataFileName=full_directory + "/" + str(save_data["nr"]))
+    # Save data
+    expHandler = data.ExperimentHandler(dataFileName=f"{directory}/data_{str(save_data['nr'])}")
 
     ## Generate trial order based on participant number
-    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data)
+    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(MET, OET, RDM))
+    exp_settings = experiment_settings(clock, win, mouse, save_data, FPS)
     comms.talk("intro")
-    # Run trials
+
+    # Run all blocks and their trials
     for task in task_order:
         # todo add intro, demo on first run? of enkel in calibration?
-        comms.talk(type(task).__name__)
+        # todo add task reminder (above grid)
+
         # Init task
-        task = task(
-            {
-                "clock": clock,
-                "win": win,
-                "mouse": mouse,
-                "ISI": save_data["ISI_in_frames"],
-                "color_gray": -0.2,
-                "RDM_color": 0.4,
-                "FPS": FPS
-            }
-        )
-        # Make trials and run them
+        task = task(exp_settings)
+        comms.talk(f"{type(task).__name__}_short")
+        # Create trials and run them
         trials = data.TrialHandler(task.make_trials(n_trials_per_block if type(task).__name__ not in ("RSopen", "RSclosed") else {}), nReps=1, method="sequential")
         expHandler.addLoop(trials)
         task.run(trials, save_data, expHandler)
@@ -626,8 +650,10 @@ def main(n_trials_per_block, blocks_per_task):
     comms.talk("outro")
     stop(win)
 
-    # todo add changing contrast
+    # todo add changing contrast !! but not in calibration
+    # todo add staircase procedure
     # todo make calibration script -> save as much data as you gather
+
 
 
 if __name__ == "__main__":
