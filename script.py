@@ -12,24 +12,20 @@ from numpy import ones
 settings: dict = {
     "background_color": "grey",
     "N_CELLS": (4, 4),
-    "TRIALS_PER_BLOCK": 45,
-    "TOTAL_BLOCKS": 20,
-    "VISUAL_ANGLE": 2.5,
+    "VISUAL_ANGLE": 2.5, #todo
     "EEG_connected": False,
     "EEG_port": None
 }
 
 EEG_codes = {
-    """  
-                 | start (0)  | stim1 (1)  | stim2 (2)  | resp (3)   | end (4)
-    FIX      (1) |     10     |            |            |            |
-    OET      (2) |     20     |     21     |     22     |     23     |     24
-    MET      (3) |     30     |     31     |     32     |     33     |     34
-    RDM      (4) |     40     |           41            |     43     |     44
-    RSopen   (5) |     50     |            |            |            |     54
-    RSclosed (6) |     60     |            |            |            |     64
+    #              | start (0)  | stim1 (1)  | stim2 (2)  | resp (3)   | end (4)
+    # FIX      (1) |     10     |            |            |            |
+    # OET      (2) |     20     |     21     |     22     |     23     |     24
+    # MET      (3) |     30     |     31     |     32     |     33     |     34
+    # RDM      (4) |     40     |           41            |     43     |     44
+    # RSopen   (5) |     50     |            |            |            |     54
+    # RSclosed (6) |     60     |            |            |            |     64
 
-    """
     "fix_cross": 10,
     "blockOET": 20,
     "OET1": 21,
@@ -51,48 +47,47 @@ EEG_codes = {
     "endRSclosed": 64
 }
 
-def init_hardware(monitor_name: str):
+def init_hardware(monitor_name: str, save_data: dict):
     if monitor_name == "Lab":
-        SCREEN_RES = (1920, 1080)  # screen resolution (pix)
-        SCREEN_WIDTH = 53  # screen width (cm) #todo
-        VIEW_DIST = 97  # viewing distance (cm) #todo
-        FPS = 100
+        SCREEN_RES = (1920, 1080) # pix
+        SCREEN_WIDTH = 54.5 # cm
+        VIEW_DIST = 100 # cm
+        refresh_rate = 100 # frames per second
     elif monitor_name == "Jelle1":
-        SCREEN_RES = (1920, 1080)  # screen resolution (pix)
-        SCREEN_WIDTH = 34  # screen width (cm)
-        VIEW_DIST = 50  # viewing distance (cm)
-        FPS = 60
+        SCREEN_RES = (1920, 1080)
+        SCREEN_WIDTH = 34
+        VIEW_DIST = 50
+        refresh_rate = 144
     elif monitor_name == "Jelle2":
-        SCREEN_RES = (1920, 1080)  # screen resolution (pix)
-        SCREEN_WIDTH = 60  # screen width (cm)
-        VIEW_DIST = 50  # viewing distance (cm)
-        FPS = 120
+        SCREEN_RES = (1920, 1080)
+        SCREEN_WIDTH = 60
+        VIEW_DIST = 50
+        refresh_rate = 120
     elif monitor_name == "Jelle3":
         SCREEN_RES = (1920, 1080)
         SCREEN_WIDTH = 53
         VIEW_DIST = 60
-        FPS = 200
+        refresh_rate = 200
     else:
         raise ValueError(f"SCREEN {monitor_name} does not exist")
 
-    pix_per_deg = (SCREEN_RES[0] / SCREEN_WIDTH) / (2 * math.degrees(math.atan(0.5 / VIEW_DIST)))  # pixels per degree
+    pix_per_deg = (SCREEN_RES[0] / SCREEN_WIDTH) / (2 * math.degrees(math.atan(0.5 / VIEW_DIST)))
     settings["pix_per_degree"] = pix_per_deg
     settings["grid_size"]: float | int = pix_per_deg * settings["VISUAL_ANGLE"]
+    save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate)
+        # this will be give inevitable rounding errors on devices with refresh rates not divisible by 100
 
     win = visual.Window(fullscr=True, units="pix", color=settings["background_color"])
     win.mouseVisible = False
 
-    ms = win.getMsPerFrame(nFrames=100, showVisual=False)
-    frame_duration = (ms[0] / 1000.0) if (ms and ms[0]) else (1 / 60)
     mouse = event.Mouse(win=win)
     clock = core.Clock()
 
-    return win, FPS, frame_duration, mouse, clock
-
+    return win, refresh_rate, mouse, clock
 
 def connect_EEG(port_name: str) -> bool:
     try:
-        settings["port"] = Serial(port_name, baudrate=115200)
+        settings["EEG_port"] = Serial(port_name, baudrate=115200)
         settings["EEG_connected"] = True
         print(f"EEG port connected ({port_name}).")
         return True
@@ -101,21 +96,10 @@ def connect_EEG(port_name: str) -> bool:
         return False
 
 def EEG_trigger(trigger_code: str) -> None:
-    """
-    todo: threading.Timer(0.01, lambda: settings["EEG_port"].write(0.to_bytes(1, 'big'))).start()
-        ! might not be safe to write from other tread to port made with one tread
-        -> zet process op andere thread om timing niet in weg te staan
-    """
     if settings["EEG_connected"]:
         settings["EEG_port"].write(EEG_codes[trigger_code].to_bytes(1, 'big'))
-        core.wait(0.01) # todo this part might be unnecessary, default is 8ms https://biosemi.com/faq/USB_Trigger_interface_ProgramPulseLength.htm
-        settings["EEG_port"].write((0).to_bytes(1, 'big'))
 
 def participant_info(save_dir: str, calibration: bool=False) -> dict: #todo add demo version
-    """
-    Makes a dialogue box to ask for participant info
-    :return: participant number, age and gender
-    """
     info = {
         "Participant nummer": "",
         "PC": ["Lab", "Jelle1", "Jelle2", "Jelle3"]
@@ -168,20 +152,18 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
             dotSize=5,
             fieldShape="square",
             fieldSize=(settings["grid_size"], settings["grid_size"]),
-            speed=(1 / self.FPS) * 50,  # pixels per frame
+            speed=(1 / self.FPS) * 50,  # pixels per frame #todo this is not right
             color=self.color,
             dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames
-            coherence=0.55, # todo check this
+            coherence=0.55, # todo decide on this, maybe this is part of staircase? or maybe contrast
         )
         # Movement directions
         self.dir = -1
-        self.dirs = [0, 90, 180, 270]
+        self.dirs = [0, 180]
         self.dir_to_angle = {
             "right": 0,
-            "up": 90,
-            "left": 180,
-            "down": 270
-        }  # !! degrees go counterclockwise
+            "left": 180
+        }
 
         self.fix_cross = visual.ShapeStim(self.win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3,
                                           closeShape=False, lineColor=class_settings["color_gray"])
@@ -193,7 +175,7 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
             trial_list.append(
                 {
                     "type": "RDM",
-                    "dir": random.choice(self.dirs)
+                    "dir": random.choice(self.dirs) #todo fully random too?
                 }
             )
 
@@ -206,7 +188,7 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
         EEG_trigger("blockRDM")
         for trial in trials:
             # Prepare EEG trigger fixation cross
-            self.win.callOnFlip(EEG_trigger, trigger_code="fixCross")
+            self.win.callOnFlip(EEG_trigger, trigger_code="fix_cross")
             # Change direction of majority per trial
             self.dir = trial["dir"]
             # Fixation cross
@@ -226,10 +208,10 @@ class RDM(DotStim): # todo also staircase procedure here? either contrast or amo
                 if first_cycle:
                     self.clock.reset()
                     first_cycle = False
-                response = event.getKeys(keyList=["left", "right", "up", "down"])
+                response = event.getKeys(keyList=["left", "right"])
 
-            EEG_trigger("responseRDM")
             rt = self.clock.getTime()
+            EEG_trigger("responseRDM")
             self.win.flip()
 
             trials.addData("rt", rt)
@@ -266,9 +248,8 @@ class OET_MET:
     @staticmethod
     def calc_grid_positions(grid_size: float | int) -> list:
         n_squares = settings["N_CELLS"][0]
-        return [
-            grid_size + grid_size / 4 * i - (grid_size + grid_size / 4 * n_squares / 2) for i in range(n_squares + 1)
-        ][::-1]
+        spacing = grid_size / n_squares
+        return [spacing * (i - n_squares / 2) for i in range(n_squares + 1)][::-1]
 
     def create_grid(self) -> visual.ElementArrayStim:
         length = settings["grid_size"]
@@ -309,8 +290,8 @@ class OET_MET:
         return positions
 
     def create_annulus_shape(self) -> visual.GratingStim:
-        # Size of stimulus: three quarters of one cell in grid
-        RADIUS: float | int = settings["grid_size"] * (3 / 4) / 4 / 2
+        # Size of stimulus: 0.5/0.875 visual angle (Wutz2016) of one cell in grid (/2 for diameter to radius)
+        RADIUS: float | int = settings["grid_size"] / settings["N_CELLS"][0] * (0.5/0.875) / 2 #todo decide how big stim, same as Wutz and Devolder?
         MASK_RES: int = 1024
         THICKNESS: float | int = 0.20
         GAP: float | int = 0.15  # Higher = bigger gap
@@ -426,11 +407,11 @@ class OET_MET:
         accuracy = response == correct_response
         return rt, response, correct_response, accuracy
 
-    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler, use_random_ISI: bool=False) -> None:
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler, calibration: bool=False) -> None:
         EEG_trigger(f"block{trials.trialList[0]['type']}")
         for trial in trials: # todo trial counter?
             # Use randomized ISI in calibration phase, and set ISI in main experiment
-            if use_random_ISI:
+            if calibration:
                 ISI = trial["random_ISI"]
             else:
                 ISI = self.ISI
@@ -453,8 +434,7 @@ class OET_MET:
             self.grid.draw()
             self.draw_annuli(1, trial)
             self.win.flip()
-
-            # ___ ISI with empty grid ___ todo fix timing?? (maybe measures not reliable)
+            # ___ ISI with empty grid ___
             for _ in range(ISI):
                 # For-loop for frame perfect timing, this is more temporally accurate than core.wait()
                 self.grid.draw()
@@ -478,7 +458,7 @@ class OET_MET:
             trials.addData("response", response)
             trials.addData("correct_response", correct_response)
             trials.addData("accuracy", int(accuracy))
-            trials.addData("ISI", self.ISI)
+            trials.addData("ISI", ISI)
             add_participant_data(trials, participant_data)
             expHandler.nextEntry()
 
@@ -617,11 +597,9 @@ def main(n_trials_per_block: int, blocks_per_task: int) -> None:
 
     # Settings
     save_data = participant_info(directory)
-    win, FPS, frame_duration, mouse, clock = init_hardware(save_data["PC"])
-    save_data["ISI_in_frames"] = math.ceil((save_data["ISI"] / 1000 * FPS))
-    comms = Communication(win)
-    # Connect EEG
     save_data["EEG_connected"] = connect_EEG("COM4")
+    win, refresh_rate, mouse, clock = init_hardware(save_data["PC"], save_data)
+    comms = Communication(win) #todo place somewhere else
 
     # Add escape key to quit experiment
     add_esc_to_quit(win)
@@ -631,12 +609,12 @@ def main(n_trials_per_block: int, blocks_per_task: int) -> None:
 
     ## Generate trial order based on participant number
     task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(MET, OET, RDM))
-    exp_settings = experiment_settings(clock, win, mouse, save_data, FPS)
+    exp_settings = experiment_settings(clock, win, mouse, save_data, refresh_rate)
     comms.talk("intro")
 
     # Run all blocks and their trials
     for task in task_order:
-        # todo add intro, demo on first run? of enkel in calibration?
+        # todo add intro, demo in calibration
         # todo add task reminder (above grid)
 
         # Init task
@@ -652,7 +630,6 @@ def main(n_trials_per_block: int, blocks_per_task: int) -> None:
 
     # todo add changing contrast !! but not in calibration
     # todo add staircase procedure
-    # todo make calibration script -> save as much data as you gather
 
 
 
