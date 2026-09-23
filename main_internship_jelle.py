@@ -74,7 +74,6 @@ def init_hardware(monitor_name: str, save_data: dict, visual_degrees: float|int)
     save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate)
         # this will be give inevitable rounding errors on devices with refresh rates not divisible by 100
 
-
     win = visual.Window(fullscr=True, units="pix", color=settings["background_color"])
     win.mouseVisible = False
 
