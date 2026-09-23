@@ -80,7 +80,7 @@ def init_hardware(monitor_name: str, save_data: dict, visual_degrees: float|int)
     mouse = event.Mouse(win=win)
     clock = core.Clock()
 
-    return win, refresh_rate, mouse, clock
+    return win, refresh_rate, mouse, clock, grid_size
 
 def connect_EEG(port_name: str) -> bool:
     try:
