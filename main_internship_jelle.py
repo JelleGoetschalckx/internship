@@ -45,41 +45,41 @@ EEG_codes = {
     "endRSclosed": 64
 }
 
-def init_hardware(monitor_name: str, save_data: dict, visual_degrees: float|int):
-    if monitor_name == "Lab":
-        SCREEN_RES = (1920, 1080) # pix
-        SCREEN_WIDTH = 54.5 # cm
-        VIEW_DIST = 100 # cm
-        refresh_rate = 100 # frames per second
-    elif monitor_name == "Jelle1":
-        SCREEN_RES = (1920, 1080)
-        SCREEN_WIDTH = 34
-        VIEW_DIST = 50
-        refresh_rate = 144
-    elif monitor_name == "Jelle2":
-        SCREEN_RES = (1920, 1080)
-        SCREEN_WIDTH = 60
-        VIEW_DIST = 50
-        refresh_rate = 120
-    elif monitor_name == "Jelle3":
-        SCREEN_RES = (1920, 1080)
-        SCREEN_WIDTH = 53
-        VIEW_DIST = 60
-        refresh_rate = 200
-    else:
-        raise ValueError(f"SCREEN {monitor_name} does not exist")
+def get_screen_config(save_data: dict) -> tuple:
+    """
+    :return: Screen resolution (pix), screen width (cm), view distance (cm), refresh rate (Hz)
+    """
+    match save_data["PC"]:
+        case "Lab":
+            return (1920, 1080), 54.5, 100, 100
+        case "Jelle1":
+            return (1920, 1080), 34, 50, 144
+        case "Jelle2":
+            return (1920, 1080), 60, 50, 120
+        case "Jelle3":
+            return (1920, 1080), 53, 60, 200
+        case _:
+            raise ValueError(f"SCREEN {save_data['PC']} does not exist")
 
-    pix_per_deg = (SCREEN_RES[0] / SCREEN_WIDTH) / (2 * math.degrees(math.atan(0.5 / VIEW_DIST)))
+def init_hardware(save_data: dict, visual_degrees: float|int):
+    screen_res, screen_width, view_dist, refresh_rate = get_screen_config(save_data)
+    pix_per_deg = (screen_res[0] / screen_width) / (2 * math.degrees(math.atan(0.5 / view_dist)))
     grid_size: float | int = pix_per_deg * visual_degrees
     save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate)
         # this will be give inevitable rounding errors on devices with refresh rates not divisible by 100
 
     win = visual.Window(fullscr=True, units="pix", color=settings["background_color"])
     win.mouseVisible = False
-
     mouse = event.Mouse(win=win)
     clock = core.Clock()
 
+    print(
+        f"Running on screen {save_data['PC']}\n"
+        f"Screen_width = {screen_width}cm\n"
+        f"View distance = {view_dist}cm\n"
+        f"Refresh_rate = {refresh_rate}Hz\n"
+        f"Grid_size = {int(grid_size)}pix"
+    )
     return win, refresh_rate, mouse, clock, grid_size
 
 def connect_EEG(port_name: str) -> bool:
@@ -137,10 +137,11 @@ def add_participant_data(trials: data.TrialHandler, participant_data: dict) -> N
 
 class RDM(DotStim):
     # decide also staircase procedure here? either contrast or amount of dots
-    def __init__(self, class_settings: dict):
+    def __init__(self, class_settings: dict) -> None:
         self.win = class_settings["win"]
         self.FPS = class_settings["FPS"]
         self.color = class_settings["RDM_color"]
+        self.grid_size = class_settings["grid_size"]
 
         DotStim.__init__(
             self,
@@ -149,10 +150,10 @@ class RDM(DotStim):
             units="pix",
             dotSize=5,
             fieldShape="square",
-            fieldSize=(settings["grid_size"], settings["grid_size"]),
-            speed=(1 / self.FPS) * 50,  # pixels per frame #todo this is not right
+            fieldSize=(self.grid_size, self.grid_size),
+            speed=(1 / self.FPS) * 50,  # pixels per frame #fixme
             color=self.color,
-            dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames
+            dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames #fixme
             coherence=0.55, # decide on this (maybe this is part of staircase? or maybe its contrast)
         )
         # Movement directions
@@ -234,21 +235,21 @@ class OET_MET:
                                           closeShape=False, lineColor=self.color)
         # Grid
         self.n_squares = 4
-        self.grid_size: float | int = settings["grid_size"]
-        self.grid_positions = self.calc_grid_positions(self.grid_size)
+        self.grid_size = class_settings["grid_size"]
+        self.grid_positions = self.calc_grid_positions()
         self.grid = self.create_grid()
         # Annuli stim
-        self.annuli_positions = self.calc_annuli_positions(self.grid_size)
+        self.annuli_positions = self.calc_annuli_positions()
         self.annulus = self.create_annulus_shape()
         # response boxes
         self.response_boxes = self.create_response_boxes()
 
-    def calc_grid_positions(self, grid_size: float | int) -> list:
-        spacing = grid_size / self.n_squares
+    def calc_grid_positions(self,) -> list:
+        spacing = self.grid_size / self.n_squares
         return [spacing * (i - self.n_squares / 2) for i in range(self.n_squares + 1)][::-1]
 
     def create_grid(self) -> visual.ElementArrayStim:
-        length = settings["grid_size"]
+        length = self.grid_size
         line_width = 1
         coords = []
         sizes = []
@@ -268,15 +269,15 @@ class OET_MET:
             units="pix",
         )
 
-    def calc_annuli_positions(self, grid_size: float | int) -> dict:
-        cell_size = grid_size / self.n_squares
+    def calc_annuli_positions(self) -> dict:
+        cell_size = self.grid_size / self.n_squares
         positions = {}
         counter = 1
         for row in range(self.n_squares - 1, -1, -1):  # Top to bottom
             for col in range(self.n_squares):  # Left to right
                 positions[counter] = (
-                    -grid_size / 2 + (col + 0.5) * cell_size,
-                    -grid_size / 2 + (row + 0.5) * cell_size
+                    -self.grid_size / 2 + (col + 0.5) * cell_size,
+                    -self.grid_size / 2 + (row + 0.5) * cell_size
                 )
                 counter += 1
 
@@ -284,7 +285,7 @@ class OET_MET:
 
     def create_annulus_shape(self) -> visual.GratingStim:
         # Size of stimulus: 0.5/0.875 visual angle (Wutz2016) of one cell in grid (/2 for diameter to radius)
-        RADIUS: float | int = settings["grid_size"] / self.n_squares * (0.5/0.875) / 2 # decide how big stim, same as Wutz and Devolder?, if same visual angle than this is just 0.5°
+        RADIUS: float | int = self.grid_size / self.n_squares * (0.5/0.875) / 2 # decide how big stim, same as Wutz and Devolder?, if same visual angle than this is just 0.5°
         MASK_RES: int = 1024
         THICKNESS: float | int = 0.20
         GAP: float | int = 0.15  # Higher = bigger gap
@@ -564,43 +565,45 @@ def stop(win: visual.Window) -> None:
     win.close()
     core.quit()
 
-def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, calibration: bool=False) -> tuple:
+def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, include_RS, calibration: bool=False) -> tuple:
     task_perms = list(permutations(tasks))
     nr_mod: int = int(nr % len(task_perms) + 1)
     task_order = (
-        RS_open,
-        RS_closed,
+        *((RS_open,) if include_RS else ()),
+        *((RS_closed,) if include_RS else ()),
         *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
-        RS_open,
-        RS_closed
+        *((RS_open,) if include_RS else ()),
+        *((RS_closed,) if include_RS else ()),
     ) if not calibration else (
         *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
     )
     # Save order to datafile
     save_data["task_order"] = (nr_mod, [clss.__name__ for clss in task_order])
+        # for an unknown reason, this must use a list and not a tuple, otherwise the .csv does not save
 
     return task_order
 
-def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mouse, save_data: dict, FPS, calibration: bool=False) -> dict:
+def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mouse, save_data: dict, FPS, grid_size: float|int, calibration: bool=False) -> dict:
     return {
         "clock": clock,
         "win": win,
         "mouse": mouse,
         "ISI": -1 if calibration else save_data["ISI_in_frames"],
         "color_gray": -0.2,
-        "RDM_color": 0.4,
-        "FPS": FPS
+        "RDM_color": 0.4, #decide
+        "FPS": FPS,
+        "grid_size": grid_size,
     }
 
 
-def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|int) -> None:
+def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|int, tasks: tuple, include_RS: bool) -> None:
     # Save file directory
     directory = os.path.join(os.getcwd(), "main_data")
 
     # Settings
     save_data = participant_info(directory)
     save_data["EEG_connected"] = connect_EEG("COM4")
-    win, refresh_rate, mouse, clock = init_hardware(save_data["PC"], save_data, visual_degrees)
+    win, refresh_rate, mouse, clock, grid_size = init_hardware(save_data, visual_degrees)
     comms = Communication(win) #todo place somewhere else
 
     # Add escape key to quit experiment
@@ -610,8 +613,8 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
     expHandler = data.ExperimentHandler(dataFileName=f"{directory}/data_{str(save_data['nr'])}")
 
     ## Generate trial order based on participant number
-    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(MET, OET, RDM))
-    exp_settings = experiment_settings(clock, win, mouse, save_data, refresh_rate)
+    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, include_RS=include_RS, tasks=tasks)
+    exp_settings = experiment_settings(clock, win, mouse, save_data, refresh_rate, grid_size)
     comms.talk("intro")
 
     # Run all blocks and their trials
@@ -632,7 +635,9 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
 
 if __name__ == "__main__":
     main(
-        n_trials_per_block=4,
-        blocks_per_task=2,
-        visual_degrees=2.5 # decide
+        n_trials_per_block=4, #decide
+        blocks_per_task=2, #decide
+        visual_degrees=2.5, # decide
+        tasks=(MET, OET, RDM),
+        include_RS=True
     )
