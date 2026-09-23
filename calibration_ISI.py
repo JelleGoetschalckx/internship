@@ -8,12 +8,12 @@ def assign_random_ISI(trials: list, max_ISI: int) -> None:
     for i, trial in enumerate(trials):
         trial["random_ISI"] = int((i % max_ISI) + 1)
 
-def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI) -> None:
+def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI, visual_degrees: float|int) -> None:
     # Save file directory
     directory = os.path.join(os.getcwd(), "calibration_ISI")
     # Settings
     save_data = participant_info(directory, calibration=True)
-    win, FPS, frame_duration, mouse, clock = init_hardware(save_data["PC"])
+    win, FPS, frame_duration, mouse, clock, grid_size = init_hardware(save_data, visual_degrees)
     comms = Communication(win)
     add_esc_to_quit(win)
 
@@ -21,8 +21,8 @@ def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI) -> No
     expHandler = data.ExperimentHandler(dataFileName=f"{directory}/calibration_{str(save_data['nr'])}")
 
     # Generate practice and calibration trial order based on participant number
-    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(OET, MET), calibration=True)
-    exp_settings = experiment_settings(clock, win, mouse, save_data, FPS, calibration=True)
+    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(OET, MET), include_RS=False)
+    exp_settings = experiment_settings(clock, win, mouse, save_data, FPS, grid_size, calibration=True)
     comms.talk("intro_calibration")
 
     # Run all blocks and their trials
@@ -44,4 +44,4 @@ def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI) -> No
     # todo add feedback on practice
 
 if __name__ == "__main__":
-    main_calibration(14, 2, 7)
+    main_calibration(14, 2, 7, 2.5)

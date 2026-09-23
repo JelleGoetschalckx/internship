@@ -6,7 +6,7 @@ from psychopy import visual, core, event, gui, data
 from psychopy.visual.dot import DotStim
 from itertools import permutations
 from serial import Serial
-from numpy import ones
+from numpy import ones, mean
 
 # Settings
 settings: dict = {
@@ -53,7 +53,7 @@ def get_screen_config(save_data: dict) -> tuple:
         case "Lab":
             return (1920, 1080), 54.5, 100, 100
         case "Jelle1":
-            return (1920, 1080), 34, 50, 144
+            return (1920, 1080), 34, 50, 60
         case "Jelle2":
             return (1920, 1080), 60, 50, 120
         case "Jelle3":
@@ -62,9 +62,12 @@ def get_screen_config(save_data: dict) -> tuple:
             raise ValueError(f"SCREEN {save_data['PC']} does not exist")
 
 def init_hardware(save_data: dict, visual_degrees: float|int):
+    # Get screen specs
     screen_res, screen_width, view_dist, refresh_rate = get_screen_config(save_data)
+    # Calculate size of grid
     pix_per_deg = (screen_res[0] / screen_width) / (2 * math.degrees(math.atan(0.5 / view_dist)))
     grid_size: float | int = pix_per_deg * visual_degrees
+    # Calculate length of ISI in frames
     save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate)
         # this will be give inevitable rounding errors on devices with refresh rates not divisible by 100
 
@@ -129,7 +132,6 @@ def participant_info(save_dir: str, calibration: bool=False) -> dict:
         "PC": info["PC"]
     }
 
-
 def add_participant_data(trials: data.TrialHandler, participant_data: dict) -> None:
     for name, value in participant_data.items():
         trials.addData(name, value)
@@ -142,6 +144,7 @@ class RDM(DotStim):
         self.FPS = class_settings["FPS"]
         self.color = class_settings["RDM_color"]
         self.grid_size = class_settings["grid_size"]
+        self.dot_speed_clock = core.Clock()
 
         DotStim.__init__(
             self,
@@ -151,10 +154,9 @@ class RDM(DotStim):
             dotSize=5,
             fieldShape="square",
             fieldSize=(self.grid_size, self.grid_size),
-            speed=(1 / self.FPS) * 50,  # pixels per frame #fixme
             color=self.color,
-            dotLife=int((1 / self.FPS) * 0.3),  # 0 to dotLife in frames #fixme
-            coherence=0.55, # decide on this (maybe this is part of staircase? or maybe its contrast)
+            dotLife=100,
+            coherence=0.55 # decide on this (maybe this is part of staircase? or maybe its contrast)
         )
         # Movement directions
         self.dir = -1
@@ -184,6 +186,7 @@ class RDM(DotStim):
         return int(self.dir_to_angle[response] == rotation)
 
     def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler) -> None:
+        trial_counter = 0
         EEG_trigger("blockRDM")
         for trial in trials:
             # Prepare EEG trigger fixation cross
@@ -201,6 +204,9 @@ class RDM(DotStim):
             event.clearEvents()
             first_cycle = True
             while not response:
+                self.speed = 20 * self.dot_speed_clock.getTime()
+                self.dot_speed_clock.reset()
+
                 self.draw()
                 self.win.flip()
                 # Reset timer only after showing very first frame
@@ -217,8 +223,10 @@ class RDM(DotStim):
             trials.addData("response", self.dir_to_angle[response[0]])
             trials.addData("correct_response", trial["dir"])
             trials.addData("accuracy", self.evaluation(self.dir, response[0]))
+            trials.addData("n_trial_this_block", trial_counter)
             add_participant_data(trials, participant_data)
             expHandler.nextEntry()
+            trial_counter += 1
 
         EEG_trigger("endBlockRDM")
 
@@ -230,9 +238,23 @@ class OET_MET:
         self.mouse = class_settings["mouse"]
         self.ISI = class_settings["ISI"]
         self.color = class_settings["color_gray"]
+        self.previous_performance = class_settings["performance_OET_MET"]
         # Fix cross
-        self.fix_cross = visual.ShapeStim(self.win, vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)), lineWidth=2.3,
-                                          closeShape=False, lineColor=self.color)
+        self.fix_cross = visual.ShapeStim(
+            self.win,
+            vertices=((0, -20), (0, 20), (0, 0), (-20, 0), (20, 0)),
+            lineWidth=2.3,
+            closeShape=False,
+            lineColor=self.color
+        )
+        # Task reminder above grid
+        self.task_reminder = visual.TextStim(
+            self.win,
+            color='white',
+            height=20,
+            pos=(0, +175),
+            autoLog=False
+        )
         # Grid
         self.n_squares = 4
         self.grid_size = class_settings["grid_size"]
@@ -290,16 +312,23 @@ class OET_MET:
         THICKNESS: float | int = 0.20
         GAP: float | int = 0.15  # Higher = bigger gap
         # Start with no mask, gradually add pixels to mask if in certain area (middle of circle and edges)
-        mask = ones((MASK_RES, MASK_RES)) * -1  # noqa
+        mask = ones((MASK_RES, MASK_RES)) * -1
         for row in range(MASK_RES):
             for col in range(MASK_RES):
                 x = (col / (MASK_RES - 1)) * 2 - 1
                 y = (row / (MASK_RES - 1)) * 2 - 1
                 if 1 - THICKNESS <= math.sqrt(x ** 2 + y ** 2) <= 1.0 and y >= GAP:
-                    mask[row, col] = 1  # noqa
+                    mask[row, col] = 1
 
-        return visual.GratingStim(self.win, tex=None, mask=mask, size=(RADIUS * 2, RADIUS * 2), color='black',
-                                  contrast=0.8, units="pix")
+        return visual.GratingStim(
+            self.win,
+            tex=None,
+            mask=mask,
+            size=(RADIUS * 2, RADIUS * 2),
+            color='black',
+            contrast=0.625,
+            units="pix"
+        )
 
     def draw_annuli(self, n_frame: int, trial: dict) -> None:
         # Pick only relevant positions for this frame (half of total)
@@ -369,7 +398,7 @@ class OET_MET:
         self.draw_response_boxes()
         return 0
 
-    def response_handler(self, trial: dict) -> tuple:
+    def response_handler(self, trial: dict, reminder_text: str) -> tuple:
         # By design, the response boxes start at (0, 0), resulting in a flash of all the boxes since
         # they all overlap with the mouse, this is solved by drawing them before showing the mouse. Feel free to refactor.
         response = 0
@@ -384,6 +413,7 @@ class OET_MET:
             # Color square that is being hovered over
             response = self.hover_response_boxes()
             self.grid.draw()
+            self.reminder(reminder_text)
             self.win.flip()
 
         rt = self.clock.getTime()
@@ -394,20 +424,37 @@ class OET_MET:
         for box in self.response_boxes:
             box["box"].fillColor = settings["background_color"]
 
-        self.win.flip()
-
         # Evaluation
         correct_response = trial["half_target"] if trial["type"] == "OET" else trial["missing_target"]
         accuracy = response == correct_response
         return rt, response, correct_response, accuracy
 
-    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler, calibration: bool=False) -> None:
+    def performance_staircase(self):
+        mean_performance = mean(self.previous_performance[-2:])
+        if mean_performance > 0.6:
+            self.annulus.contrast = max(0.25, self.annulus.contrast - 1/8)
+        elif mean_performance < 0.4:
+            self.annulus.contrast = min(1, self.annulus.contrast + 1/8)
+
+    def reminder(self, reminder_text):
+        self.task_reminder.text = reminder_text
+        self.task_reminder.draw()
+
+    def run(self, trials: data.TrialHandler, participant_data: dict, expHandler: data.ExperimentHandler, calibration: bool=False) -> float | int:
         """
         Note that currently both parts of the grid are displayed for one frame. This corresponds to 10ms on a 100Hz
         screen, but a loop (as during ISI) should be added if you work with a monitor with a multiple of 100Hz
         """
+        trial_counter = 0
+        n_correct_this_block = 0
+        reminder_text = "LEEG" if trials.trialList[0].type == "MET" else "HALF"
+        # Change contrast of stimuli to get stable performance every two blocks
+        if not calibration:
+            if len(self.previous_performance) and not len(self.previous_performance) % 2:
+                self.performance_staircase()
+        # Run trials
         EEG_trigger(f"block{trials.trialList[0]['type']}")
-        for trial in trials: # todo trial counter?, overarching trial counter!
+        for trial in trials:
             # Use randomized ISI in calibration phase, and set ISI in main experiment
             if calibration:
                 ISI = trial["random_ISI"]
@@ -418,11 +465,13 @@ class OET_MET:
             self.win.callOnFlip(EEG_trigger, trigger_code="fixCross")
             # ___ Fixation cross for 0.5s ___
             self.fix_cross.draw()
+            self.reminder(reminder_text)
             self.win.flip()
             core.wait(0.5)
 
             # ___ Empty grid for 0.5 to 1.5s ___
             self.grid.draw()
+            self.reminder(reminder_text)
             self.win.flip()
             # Prepare EEG trigger first frame
             self.win.callOnFlip(EEG_trigger, trigger_code=f"{trial['type']}1")
@@ -431,11 +480,13 @@ class OET_MET:
             # ___ First frame ___
             self.grid.draw()
             self.draw_annuli(1, trial)
+            self.reminder(reminder_text)
             self.win.flip()
             # ___ ISI with empty grid ___
             for _ in range(ISI):
                 # For-loop for frame perfect timing, this is more temporally accurate than core.wait()
                 self.grid.draw()
+                self.reminder(reminder_text)
                 self.win.flip()
 
             # Prepare EEG trigger second frame
@@ -443,25 +494,32 @@ class OET_MET:
             # ___ Second frame ___
             self.grid.draw()
             self.draw_annuli(2, trial)
+            self.reminder(reminder_text)
             self.win.flip()
 
             # Stop second frame, wait 0.5s before response
             self.grid.draw()
+            self.reminder(reminder_text)
             self.win.flip()
             core.wait(0.5)
-
+            print(trial['half_target'] if trial['type'] == "OET" else trial['missing_target'])
             # ___ Response ___
-            rt, response, correct_response, accuracy = self.response_handler(trial)
+            rt, response, correct_response, accuracy = self.response_handler(trial, reminder_text)
+            if accuracy:
+                n_correct_this_block += 1
+            # Save data
             trials.addData("rt", rt)
             trials.addData("response", response)
             trials.addData("correct_response", correct_response)
             trials.addData("accuracy", int(accuracy))
             trials.addData("ISI", ISI)
+            trials.addData("n_trial_this_block", trial_counter)
             add_participant_data(trials, participant_data)
             expHandler.nextEntry()
+            trial_counter +=1
 
         EEG_trigger(f"endBlock{trials.trialList[0]['type']}")
-        # todo add staircase per so many trials, but not in calibration!!
+        return n_correct_this_block / len(trials.trialList)
 
 
 class OET(OET_MET):
@@ -531,22 +589,23 @@ class RS_closed(rsEEG):
 class Communication:
     def __init__(self, win: visual.Window):
         self.win = win
-        self.text = visual.TextStim(win, color="black") # decide color
+        self.text = visual.TextStim(win, color="white", height=35)
 
-    def talk(self, message: str, flip: bool=True) -> None:
+    def talk(self, message: str, progression: str="", flip: bool=True) -> None:
         # todo type texts
         options = {
-            "intro_calibration": "[placeholder_intro_calibration]\nDruk op spatie om verder te gaan.",
-            "intro": "[placeholder_intro]\nDruk op spatie om verder te gaan.",
-            "RS_open_short": "[placeholder_RS_open_short]\nDruk op spatie om verder te gaan.",
-            "RS_closed_short": "[placeholder_RS_closed_short]\nDruk op spatie om verder te gaan.",
-            "RDM_short": "[placeholder_RDM_short]\nDruk op spatie om verder te gaan.",
-            "OET_calibration": "[placeholder_OET_calibration]\nDruk op spatie om verder te gaan.",
-            "OET_short": "[placeholder_OET_short]\nDruk op spatie om verder te gaan.",
-            "MET_calibration": "[placeholder_MET_calibration]\nDruk op spatie om verder te gaan.",
-            "MET_short": "[placeholder_MET_short]\nDruk op spatie om verder te gaan.",
-            "outro_calibration": "[placeholder_outro_calibration]\nDruk op spatie om verder te gaan.",
-            "outro": "[placeholder_outro]\nDruk op spatie om verder te gaan.",
+            "intro_calibration": "[placeholder_intro_calibration]\n\nDruk op spatie om verder te gaan.",
+            "intro": "[placeholder_intro]\n\nDruk op spatie om verder te gaan.",
+            "RS_open_short": "[placeholder_RS_open_short]\n\nDruk op spatie om verder te gaan.",
+            "RS_closed_short": "[placeholder_RS_closed_short]\n\nDruk op spatie om verder te gaan.",
+            "RDM_short": "XXX\n\nDruk op spatie om verder te gaan.",
+            "OET_calibration": "[placeholder_OET_calibration]\n\nDruk op spatie om verder te gaan.",
+            "OET_short": "In het komende blok is het je taak om het vak met HALVE cirkels aan te duiden.\n\nDruk op spatie om verder te gaan.",
+            "MET_calibration": "[placeholder_MET_calibration]\n\nDruk op spatie om verder te gaan.",
+            "MET_short": "In het komende blok is het je taak om het LEGE vak aan te duiden.\n\nDruk op spatie om verder te gaan.",
+            "break": f"Je hebt {progression} voltooid.\n\nJe mag even een pauze nemen, druk op spatie om verder te gaan.",
+            "outro_calibration": "[placeholder_outro_calibration]\n\nDruk op spatie om verder te gaan.",
+            "outro": "[placeholder_outro]\n\nDruk op spatie om verder te gaan."
         }
         self.text.text = options[message]
         self.text.draw()
@@ -565,7 +624,7 @@ def stop(win: visual.Window) -> None:
     win.close()
     core.quit()
 
-def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, include_RS, calibration: bool=False) -> tuple:
+def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, include_RS) -> tuple:
     task_perms = list(permutations(tasks))
     nr_mod: int = int(nr % len(task_perms) + 1)
     task_order = (
@@ -574,8 +633,6 @@ def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, include_
         *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
         *((RS_open,) if include_RS else ()),
         *((RS_closed,) if include_RS else ()),
-    ) if not calibration else (
-        *[clss for _ in range(blocks_per_task) for clss in task_perms[(nr_mod - 1) % len(task_perms)]],
     )
     # Save order to datafile
     save_data["task_order"] = (nr_mod, [clss.__name__ for clss in task_order])
@@ -593,6 +650,7 @@ def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mous
         "RDM_color": 0.4, #decide
         "FPS": FPS,
         "grid_size": grid_size,
+        "performance_OET_MET": []
     }
 
 
@@ -604,7 +662,7 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
     save_data = participant_info(directory)
     save_data["EEG_connected"] = connect_EEG("COM4")
     win, refresh_rate, mouse, clock, grid_size = init_hardware(save_data, visual_degrees)
-    comms = Communication(win) #todo place somewhere else
+    comms = Communication(win)
 
     # Add escape key to quit experiment
     add_esc_to_quit(win)
@@ -613,31 +671,33 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
     expHandler = data.ExperimentHandler(dataFileName=f"{directory}/data_{str(save_data['nr'])}")
 
     ## Generate trial order based on participant number
-    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, include_RS=include_RS, tasks=tasks)
+    task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks, include_RS)
     exp_settings = experiment_settings(clock, win, mouse, save_data, refresh_rate, grid_size)
     comms.talk("intro")
 
     # Run all blocks and their trials
-    for task in task_order:
-        # todo add intro
-        # todo add task reminder (above grid)
-
-        # Init task
+    for i, task in enumerate(task_order):
+        # Init task and give short instructions
         task = task(exp_settings)
         comms.talk(f"{type(task).__name__}_short")
         # Create trials and run them
         trials = data.TrialHandler(task.make_trials(n_trials_per_block if type(task).__name__ not in ("RSopen", "RSclosed") else {}), nReps=1, method="sequential")
         expHandler.addLoop(trials)
-        task.run(trials, save_data, expHandler)
+        performance = task.run(trials, save_data, expHandler)
+
+        if type(task).__name__ in ("OET", "MET"):
+            exp_settings["performance_OET_MET"].append(performance)
+
+        comms.talk("break", progression=f"{i+1} van de {len(task_order)} blokken")
 
     comms.talk("outro")
     stop(win)
 
 if __name__ == "__main__":
     main(
-        n_trials_per_block=4, #decide
-        blocks_per_task=2, #decide
+        n_trials_per_block=2, #decide
+        blocks_per_task=4, #decide
         visual_degrees=2.5, # decide
-        tasks=(MET, OET, RDM),
+        tasks=(RDM, OET, MET),
         include_RS=True
     )
