@@ -1,28 +1,29 @@
 import os
 from psychopy import data
-from main_internship_jelle import OET, MET, Communication, init_hardware, stop, participant_info, add_esc_to_quit, task_ordener, experiment_settings
+from main_internship_jelle import OET, MET, Communication, init_hardware, stop, participant_info, init_esc_to_quit, task_ordener, experiment_settings
 
-def assign_random_ISI(trials: list, max_ISI: int) -> None:
-    assert len(trials) >= max_ISI, f"Not enough trials ({len(trials)}) to test all ISI's ({max_ISI})."
-    assert not (len(trials) % max_ISI), f"ISI's ({max_ISI}) are unbalanced with {len(trials)} trials."
+def assign_random_ISI(trials: list, ISI_range: tuple) -> None:
+    assert len(trials) >= ISI_range[-1] - ISI_range[0] + 1, f"Not enough trials ({len(trials)}) to test all ISI's ({ISI_range[-1]})."
+    assert not (len(trials) % (ISI_range[-1] - ISI_range[0] + 1)), f"Calibration of ISI's ({ISI_range[0]} to {ISI_range[-1]}) is unbalanced with {len(trials)} trials."
     for i, trial in enumerate(trials):
-        trial["random_ISI"] = int((i % max_ISI) + 1)
+        trial["random_ISI"] = int((i % (ISI_range[-1] - ISI_range[0] + 1)) + ISI_range[0])
+        print(trial["random_ISI"])
 
-def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI, visual_degrees: float|int) -> None:
+def main_calibration(trials_per_block: int, blocks_per_task: int, ISI_range: tuple[int, int], visual_degrees: float|int) -> None:
     # Save file directory
     directory = os.path.join(os.getcwd(), "calibration_ISI")
     # Settings
     save_data = participant_info(directory, calibration=True)
-    win, FPS, frame_duration, mouse, clock, grid_size = init_hardware(save_data, visual_degrees)
+    win, refresh_rate, mouse, clock, grid_size = init_hardware(save_data, visual_degrees, calibration=True)
     comms = Communication(win)
-    add_esc_to_quit(win)
+    init_esc_to_quit(win)
 
     # Save file
     expHandler = data.ExperimentHandler(dataFileName=f"{directory}/calibration_{str(save_data['nr'])}")
 
     # Generate practice and calibration trial order based on participant number
     task_order = task_ordener(save_data["nr"], blocks_per_task, save_data, tasks=(OET, MET), include_RS=False)
-    exp_settings = experiment_settings(clock, win, mouse, save_data, FPS, grid_size, calibration=True)
+    exp_settings = experiment_settings(clock, win, mouse, save_data, refresh_rate, grid_size, calibration=True)
     comms.talk("intro_calibration")
 
     # Run all blocks and their trials
@@ -32,7 +33,7 @@ def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI, visua
         comms.talk(f"{type(task).__name__}_calibration")
         # Create trials, assign a random ISI to them, run them in randomized order
         raw_trials = task.make_trials(trials_per_block)
-        assign_random_ISI(raw_trials, max_ISI)
+        assign_random_ISI(raw_trials, ISI_range)
         trials = data.TrialHandler(raw_trials, nReps=1, method="random")
         expHandler.addLoop(trials)
         task.run(trials, save_data, expHandler, calibration=True)
@@ -44,4 +45,9 @@ def main_calibration(trials_per_block: int, blocks_per_task: int, max_ISI, visua
     # todo add feedback on practice
 
 if __name__ == "__main__":
-    main_calibration(14, 2, 7, 2.5)
+    main_calibration(
+        trials_per_block=14, # should be a multiple of max_ISI # decide
+        blocks_per_task=2, # decide
+        ISI_range=(1, 7), # decide (currently same as Devolder)
+        visual_degrees=2.5 # decide
+    )

@@ -1,4 +1,3 @@
-from __future__ import annotations
 import random
 import math
 import os
@@ -61,14 +60,14 @@ def get_screen_config(save_data: dict) -> tuple:
         case _:
             raise ValueError(f"SCREEN {save_data['PC']} does not exist")
 
-def init_hardware(save_data: dict, visual_degrees: float|int):
+def init_hardware(save_data: dict, visual_degrees: float|int, calibration: bool=False):
     # Get screen specs
     screen_res, screen_width, view_dist, refresh_rate = get_screen_config(save_data)
     # Calculate size of grid
     pix_per_deg = (screen_res[0] / screen_width) / (2 * math.degrees(math.atan(0.5 / view_dist)))
     grid_size: float | int = pix_per_deg * visual_degrees
     # Calculate length of ISI in frames
-    save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate)
+    save_data["ISI_in_frames"] = int((save_data["ISI"] / 1000) * refresh_rate) if not calibration else -1
         # this will be give inevitable rounding errors on devices with refresh rates not divisible by 100
 
     win = visual.Window(fullscr=True, units="pix", color=settings["background_color"])
@@ -141,7 +140,7 @@ class RDM(DotStim):
     # decide also staircase procedure here? either contrast or amount of dots
     def __init__(self, class_settings: dict) -> None:
         self.win = class_settings["win"]
-        self.FPS = class_settings["FPS"]
+        self.refresh_rate = class_settings["refresh_rate"]
         self.color = class_settings["RDM_color"]
         self.grid_size = class_settings["grid_size"]
         self.dot_speed_clock = core.Clock()
@@ -155,6 +154,7 @@ class RDM(DotStim):
             fieldShape="square",
             fieldSize=(self.grid_size, self.grid_size),
             color=self.color,
+            contrast=0.625,
             dotLife=100,
             coherence=0.55 # decide on this (maybe this is part of staircase? or maybe its contrast)
         )
@@ -614,7 +614,7 @@ class Communication:
             event.waitKeys(keyList=["space"])
 
 
-def add_esc_to_quit(win: visual.Window):
+def init_esc_to_quit(win: visual.Window):
     event.globalKeys.clear()
     event.globalKeys.add(key="escape", func=stop, func_kwargs={"win": win})
 
@@ -640,15 +640,15 @@ def task_ordener(nr: int, blocks_per_task: int, save_data: dict, tasks, include_
 
     return task_order
 
-def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mouse, save_data: dict, FPS, grid_size: float|int, calibration: bool=False) -> dict:
+def experiment_settings(clock: core.Clock, win: visual.Window, mouse: event.Mouse, save_data: dict, refresh_rate, grid_size: float|int, calibration: bool=False) -> dict:
     return {
         "clock": clock,
         "win": win,
         "mouse": mouse,
         "ISI": -1 if calibration else save_data["ISI_in_frames"],
         "color_gray": -0.2,
-        "RDM_color": 0.4, #decide
-        "FPS": FPS,
+        "RDM_color": "black", #decide
+        "refresh_rate": refresh_rate,
         "grid_size": grid_size,
         "performance_OET_MET": []
     }
@@ -665,7 +665,7 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
     comms = Communication(win)
 
     # Add escape key to quit experiment
-    add_esc_to_quit(win)
+    init_esc_to_quit(win)
 
     # Save data
     expHandler = data.ExperimentHandler(dataFileName=f"{directory}/data_{str(save_data['nr'])}")
@@ -676,7 +676,8 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
     comms.talk("intro")
 
     # Run all blocks and their trials
-    for i, task in enumerate(task_order):
+    task_complete_counter = 0
+    for task in task_order:
         # Init task and give short instructions
         task = task(exp_settings)
         comms.talk(f"{type(task).__name__}_short")
@@ -687,16 +688,17 @@ def main(n_trials_per_block: int, blocks_per_task: int, visual_degrees: float|in
 
         if type(task).__name__ in ("OET", "MET"):
             exp_settings["performance_OET_MET"].append(performance)
-
-        comms.talk("break", progression=f"{i+1} van de {len(task_order)} blokken")
+        if type(task).__name__ not in ("RSopen", "RSclosed"):
+            task_complete_counter += 1
+            comms.talk("break", progression=f"{task_complete_counter} van de {blocks_per_task * len(tasks)} blokken")
 
     comms.talk("outro")
     stop(win)
 
 if __name__ == "__main__":
     main(
-        n_trials_per_block=2, #decide
-        blocks_per_task=4, #decide
+        n_trials_per_block=2, # decide
+        blocks_per_task=4, # decide
         visual_degrees=2.5, # decide
         tasks=(RDM, OET, MET),
         include_RS=True
