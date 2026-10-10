@@ -23,7 +23,7 @@ def trial_maker(total_n_trials: int, trial_type: str) -> list:
 
     return trial_list
 
-n_trials = 2000
+n_trials = 240
 for i in range(50):
     trials = trial_maker(n_trials, "test")
 
