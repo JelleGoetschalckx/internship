@@ -50,8 +50,8 @@ def find_intersection_of_performances(file_dir: str, participant_nr: str):
     if ISI_cross:
         plot.axvline(ISI_cross, linestyle=":", color="black")
 
-    plot.xlabel("ISI (frames)")
-    plot.ylabel("% correct")
+    plot.xlabel("ISI (in frames)")
+    plot.ylabel("Mean accuracy")
     if ISI_cross is not None:
         plot.title(f"Intersection = {round(ISI_cross)} frames (exact nr: {ISI_cross:.2f})")
     else:
@@ -70,4 +70,4 @@ def find_intersection_of_performances(file_dir: str, participant_nr: str):
     return round(ISI_cross) if ISI_cross is not None else "None"
 
 if __name__ == "__main__":
-    find_intersection_of_performances('calibration/calibration_', str(211))
+    find_intersection_of_performances('calibration/calibration_', str(2342222))
